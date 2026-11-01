@@ -1,0 +1,5 @@
+TargetPSMPServer,PSMPPort,TargetUser,TargetServer,PSMPEnduser,EndUserSafe,EndUserApp-ID,EndUserObjectName,HoldSec,Retries,Enabled
+psmp01.example.com,,root,linux01.example.com,,,,,60,1,yes
+psmp01.example.com,,oracle,db01.example.com,,,,,60,1,yes
+psmp02.example.com,2222,appadmin,app01.example.com,,,,,60,1,yes
+psmp03.example.com,,root,linux50.example.com,dr-test-user,DRTestUser,PSMP-HealthTest-DR,dr-test-user,120,0,yes

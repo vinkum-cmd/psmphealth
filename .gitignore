@@ -1,0 +1,14 @@
+# site data and run output must never be committed
+envs/*
+!envs/example
+!envs/example/**
+logs/
+results/
+known_hosts
+run.lock
+status.json
+history.csv
+mail-state.json
+dist/
+__pycache__/
+*.pyc

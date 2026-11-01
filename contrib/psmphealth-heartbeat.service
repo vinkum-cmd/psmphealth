@@ -1,0 +1,7 @@
+[Unit]
+Description=PSMP health test heartbeat check (environment prod)
+[Service]
+Type=oneshot
+User=psmphealth
+Environment=PSMP_ENV=prod
+ExecStart=/usr/bin/python3 /opt/psmphealth/run-psmp-tests.py --heartbeat-check

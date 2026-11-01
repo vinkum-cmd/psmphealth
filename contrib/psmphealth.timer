@@ -1,0 +1,7 @@
+[Unit]
+Description=Run the PSMP health test every 30 minutes
+[Timer]
+OnCalendar=*:10/30
+RandomizedDelaySec=30
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Hourly PSMP health test heartbeat check
+[Timer]
+OnCalendar=hourly
+[Install]
+WantedBy=timers.target
