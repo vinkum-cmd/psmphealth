@@ -6,7 +6,7 @@ executed or placed on a command line; the command run on the target is fixed ins
 usage: run-psmp-tests.py [--env NAME] [--csv FILE] [--only 1,3] [--parallel N] [--no-mail] [--dry-run] [--validate] [--pause|--resume]
                          [--heartbeat-check] [--test-mail] [--resend RESULTS.csv] [--version]
 """
-import argparse, csv, json, os, subprocess, sys, tempfile, threading, time
+import argparse, csv, getpass, json, os, subprocess, sys, tempfile, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from email.message import EmailMessage
@@ -20,6 +20,7 @@ from report import STEPS, render_report, send_mail               # noqa: E402
 VERSION = open(os.path.join(HERE, "VERSION")).read().strip() if os.path.exists(os.path.join(HERE, "VERSION")) else "dev"
 ENGINE = os.environ.get("PSMP_ENGINE") or os.path.join(HERE, "psmp-engine.sh")      # tests point this at a mock
 PRINT = threading.Lock()
+MANUAL = {"pw": "", "rejected": threading.Event()}      # --manual: the typed password (memory only) and the stop flag
 def say(*a): 
     with PRINT: print(*a, flush=True)
 
@@ -28,7 +29,8 @@ def eff(row): return {c: row["env"].get(v, "") for c, v in psmcfg.STD_COLS}
 def run_attempt(row, settings, paths, outdir, attempt, hold):
     res = {"result": "FAIL", "failed_step": "runner", "reason": "", "steps": {}, "fixes": "", "gap_sec": 0, "detail_log": ""}
     rj = tempfile.mktemp(prefix="psmpres-")
-    env = dict(os.environ); env.update(row["env"])
+    env = dict(os.environ); env.update(row["env"]); env.pop("PSMP_MANUAL_PW", None)
+    if MANUAL["pw"]: env["PSMP_MANUAL_PW"] = MANUAL["pw"]
     env.update(RESULT_JSON=rj, KNOWN_HOSTS=paths["known_hosts"], WAIT=str(row["env"].get("WAIT") or hold), PSMP_REASON=str(psmcfg.rel(settings, "test.reason", "automated psmp health test")))
     tmo = int(psmcfg.rel(settings, "reliability.row_timeout_sec", 600))
     try:
@@ -68,7 +70,9 @@ def make_shot(row, res, settings, outdir):
 
 def run_row(row, settings, paths, outdir, hold):
     t0 = time.time(); attempts = 0
-    if row["err"]:
+    if MANUAL["rejected"].is_set():
+        res = {"result": "FAIL", "failed_step": "skipped", "reason": "skipped: PSMP rejected the manual password on an earlier row (stopped to avoid locking the account)", "steps": {}, "gap_sec": 0, "detail_log": ""}
+    elif row["err"]:
         res = {"result": "FAIL", "failed_step": "input", "reason": row["err"], "steps": {}, "gap_sec": 0, "detail_log": ""}
     else:
         pre_ok, pre_msg = True, ""
@@ -79,6 +83,8 @@ def run_row(row, settings, paths, outdir, hold):
             wait = int(psmcfg.rel(settings, "reliability.retry_wait_sec", 30))
             for attempts in range(1, maxtry + 1):
                 res = run_attempt(row, settings, paths, outdir, attempts, hold)
+                if MANUAL["pw"] and res["result"] != "PASS" and res.get("failed_step") == "login" and any(k in res.get("reason", "").lower() for k in ("prompted again", "permission denied")):
+                    MANUAL["rejected"].set(); break                      # wrong password: never send it twice
                 if res["result"] == "PASS" or attempts == maxtry: break
                 say(f"           row {row['n']}: attempt {attempts} failed at {res.get('failed_step')} - retrying in {wait}s"); time.sleep(wait)
     if not res.get("fixes") and res["result"] != "PASS": res["fixes"] = EXTRA_FIX.get(res.get("failed_step"), "")
@@ -116,7 +122,7 @@ def heartbeat_check(settings, mailcfg, paths, no_mail):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--env", default=""); ap.add_argument("--csv", default=""); ap.add_argument("--only", default="")
     ap.add_argument("--parallel", type=int, default=0, help="run N rows at the same time (1-10; default from env.json reliability.parallel)")
-    ap.add_argument("--no-mail", action="store_true"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-mail", action="store_true"); ap.add_argument("--manual", action="store_true", help="skip CCP: type the end user name and password once; used for every row"); ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--validate", action="store_true", help="check tools, CSV, DNS, ports, CCP and mail reachability - opens no session")
     ap.add_argument("--pause", action="store_true"); ap.add_argument("--resume", action="store_true"); ap.add_argument("--heartbeat-check", action="store_true"); ap.add_argument("--version", action="store_true")
     ap.add_argument("--resend", default=""); ap.add_argument("--test-mail", action="store_true")
@@ -135,15 +141,23 @@ def main():
         except Exception as ex: print("report mail NOT sent:", ex); return 1
     reason = str(psmcfg.rel(settings, "test.reason", "automated psmp health test"))
     if not psmcfg.SAFE_VALUE.match(reason): raise SystemExit("test.reason in env.json contains characters that are not allowed")
-    csvpath = a.csv or paths["tests"]; rows = psmcfg.read_rows(csvpath, psmcfg.defaults_for(settings))
+    csvpath = a.csv or paths["tests"]; rows = psmcfg.read_rows(csvpath, psmcfg.defaults_for(settings), manual=a.manual)
     if a.only: keep = {int(x) for x in a.only.split(",")}; rows = [r for r in rows if r["n"] in keep]
     if a.validate:
         print(f"psmphealth {VERSION}  environment: {envname}  tests: {csvpath}")
-        bad = psmchecks.validate(settings, mailcfg, rows, paths); print(f"\n{'ALL CHECKS PASSED' if not bad else str(bad) + ' PROBLEM(S) FOUND'}"); return 1 if bad else 0
+        bad = psmchecks.validate(settings, mailcfg, rows, paths, manual=a.manual); print(f"\n{'ALL CHECKS PASSED' if not bad else str(bad) + ' PROBLEM(S) FOUND'}"); return 1 if bad else 0
     if a.dry_run:
         for r in rows: print(r["n"], r["err"] or "ok", "(disabled)" if not r["enabled"] else "", {k: v for k, v in r["env"].items()})
         return 0
     if psmstate.paused(paths["base"]): print(f"environment '{envname}' is PAUSED (remove with --resume) - not starting"); return 4
+    if a.manual:
+        if not sys.stdin.isatty(): raise SystemExit("--manual needs a terminal to type the user name and password (it cannot be piped in or scheduled)")
+        user = input("End user name (used for all rows): ").strip()
+        if not user or " " in user or not psmcfg.SAFE_VALUE.match(user): raise SystemExit("end user name is empty or has characters that are not allowed (letters, digits and . _ : @ / - only) - not starting")
+        MANUAL["pw"] = getpass.getpass(f"Password for {user} (hidden, not stored): ")
+        if not MANUAL["pw"]: raise SystemExit("empty password - not starting")
+        for r in rows:
+            if not r["err"]: r["env"]["PSMP_USER"] = user          # the typed user replaces PSMPEnduser from the CSV / env.json for every row
     ok, msg = psmstate.acquire_lock(os.path.join(paths["base"], "run.lock"), int(psmcfg.rel(settings, "reliability.max_run_minutes", 120)))
     if not ok: print(msg, "- not starting"); return 3
     par = max(1, min(10, a.parallel or int(psmcfg.rel(settings, "reliability.parallel", 1)))); hold = int(psmcfg.rel(settings, "test.hold_seconds", 60))
@@ -193,7 +207,7 @@ def main():
         head = sorted({v[1] for v in kinds.values() if v[1]}); pre = mailcfg.get("subject_prefix", "[PSMP health]")
         subj = (f"{pre} ALL OK ({npass} tests)" if not nfail else f"{pre} {nfail} FAILED, {npass} OK") + (f" ({', '.join(head)})" if head else "") + f" - run {runid}"
         with open(path, newline="") as f: table = list(csv.DictReader(f))
-        text, hb = render_report(table, runid, f"{datetime.now():%F %T}", os.uname().nodename, int(time.time() - started), path, kinds={str(n): v[1] for n, v in kinds.items()}, shots={str(r["n"]): s2["screenshot"] for r, s2 in results if s2.get("screenshot")}, note=f"psmphealth {VERSION} / environment {envname}")
+        text, hb = render_report(table, runid, f"{datetime.now():%F %T}", os.uname().nodename, int(time.time() - started), path, kinds={str(n): v[1] for n, v in kinds.items()}, shots={str(r["n"]): s2["screenshot"] for r, s2 in results if s2.get("screenshot")}, note=f"psmphealth {VERSION} / environment {envname}" + (" / credentials: MANUAL password (CCP skipped)" if a.manual else ""))
         try: sent = send_mail(mailcfg, subj, text, hb, path, shots={str(r["n"]): s2["screenshot"] for r, s2 in results if s2.get("screenshot")})
         except Exception as ex: print("WARNING: mail could not be sent:", ex)
     for _, (key, k, ns) in kinds.items():

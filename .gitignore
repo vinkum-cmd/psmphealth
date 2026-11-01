@@ -12,3 +12,6 @@ mail-state.json
 dist/
 __pycache__/
 *.pyc
+
+# a test clone of this repo inside the working copy
+/psmphealth/

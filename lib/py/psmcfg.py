@@ -56,7 +56,8 @@ def defaults_for(settings):
            "CP_SAFE": c.get("safe", ""), "CP_APPID": c.get("app_id", ""), "CP_OBJECT": c.get("object", ""), "TARGET_USER": d.get("target_user", ""), "TARGET_HOST": d.get("target_server", "")}
     return {k: v for k, v in out.items() if v}
 
-def read_rows(path, defaults=None):
+CCP_ONLY = {"CCP_URL", "CP_SAFE", "CP_APPID", "CP_OBJECT", "PSMP_USER"}      # not needed with --manual
+def read_rows(path, defaults=None, manual=False):
     defaults = defaults or {}
     with open(path, newline="", encoding="utf-8-sig") as f:
         rd = csv.reader(f); header = next(rd)
@@ -72,14 +73,14 @@ def read_rows(path, defaults=None):
                 v = vals.get(k, "")
                 if not SAFE_VALUE.match(v): err = f"column {k}: characters not allowed"; break
                 if v == "" and var in defaults: v = defaults[var]
-                if req and not v: err = f"column {k}: required (no value and no default in env.json)"; break
+                if req and not v and not (manual and var in CCP_ONLY): err = f"column {k}: required (no value and no default in env.json)"; break
                 if v != "": env[var] = v
             retries, enabled = None, True
             if not err:
-                env["CCP_URL"] = url(env["CCP_URL"])
+                if "CCP_URL" in env: env["CCP_URL"] = url(env["CCP_URL"])
                 if not HOST_OK.match(env["PSMP_HOST"]): err = "TargetPSMPServer must be a host name or IPv4 address"
                 elif not HOST_OK.match(env["TARGET_HOST"]): err = "TargetServer must be a host name or IPv4 address"
-                elif " " in env["PSMP_USER"] or " " in env["TARGET_USER"]: err = "PSMPEnduser and TargetUser must not contain spaces"
+                elif " " in env.get("PSMP_USER", "") or " " in env["TARGET_USER"]: err = "PSMPEnduser and TargetUser must not contain spaces"
                 elif env.get("PSMP_PORT", "22") and not (env.get("PSMP_PORT", "22").isdigit() and 1 <= int(env.get("PSMP_PORT", "22")) <= 65535): err = "PSMPPort must be 1-65535"
                 elif "WAIT" in env and not (env["WAIT"].isdigit() and 10 <= int(env["WAIT"]) <= 900): err = "HoldSec must be a whole number from 10 to 900"
                 rv = env.pop("_RETRIES", ""); ev = env.pop("_ENABLED", "yes").lower()

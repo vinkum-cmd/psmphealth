@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mock engine for the self-test: pops the first line of $MOCK_SEQ ("PASS" or "FAIL:<step>:<reason>") and writes the RESULT_JSON the runner expects. Opens no session.
 line=$( ( flock 9; l=$(head -1 "$MOCK_SEQ"); sed -i 1d "$MOCK_SEQ"; echo "$l" ) 9>"$MOCK_SEQ.lock" )
-echo "$PSMP_HOST $TARGET_USER@$TARGET_HOST -> ${line:-PASS}" >> "$MOCK_SEQ.calls"
+echo "$PSMP_HOST $TARGET_USER@$TARGET_HOST -> ${line:-PASS} pwlen=${#PSMP_MANUAL_PW} ccp=${CCP_URL:-none}" >> "$MOCK_SEQ.calls"
 echo "[10:00:00] connecting: mock via $PSMP_HOST"; echo "    ssh: [1] 1700000000 $TARGET_USER"; echo "    ssh: [2] 1700000060 $TARGET_USER"
 sleep "${MOCK_SLEEP:-0}"
 if [ "${line:-PASS}" = PASS ]; then

@@ -1,4 +1,4 @@
-# psmphealth (Linux/Unix) - v1
+# psmphealth (Linux/Unix) - v1.1
 
 Tests PSMP the way an end user uses it: log on through a PSMP server to a target account on a target server, run `whoami`, stay connected for the hold time, run `whoami` again.
 One CSV row = one test, so you can list many PSMP servers, each with its own target accounts and target servers. One summary mail per run with a terminal-style screenshot of every session embedded in it. `mail.send_on` = `always` (mail every run; subject "ALL OK (n tests)" when all pass) or `failure` (only FAILED / STILL FAILING / RECOVERED).
@@ -32,6 +32,13 @@ Allowed characters: letters, digits and `. _ : @ / - space`; hosts as names or I
 | `--pause` / `--resume` | kill switch |
 | `--heartbeat-check` | alert if no run finished within `reliability.heartbeat_hours` |
 | `--test-mail` / `--resend results.csv` / `--version` | mail checks / re-send a report / version |
+
+## Manual password (`--manual`)
+`python3 run-psmp-tests.py --env lab --manual` skips CCP for every row: the tool asks once, on the terminal, for the end user name and then the password (hidden) and uses that pair for all rows; it never assumes a user, and the typed name replaces `PSMPEnduser` from the CSV and `env.json`. It works with any login that is a plain password (CyberArk vault password, LDAP). One-time RADIUS codes are not supported.
+* The password lives only in memory, goes to each session through an environment variable (never a command line) and is never written to logs, screenshots, results or mail. The mail notes "credentials: MANUAL".
+* Needs a terminal (cannot be piped or scheduled). One end user per run; use a second run for another user.
+* CCP columns (`EndUserSafe`, `EndUserApp-ID`, `EndUserObjectName`, `PSMPEnduser`) and `ccp_url` may be empty; `--validate --manual` skips the CCP check.
+* If PSMP rejects the password, the run stops: no retry and the remaining rows are marked "skipped", so a typo cannot lock the account.
 
 ## Screenshots
 After each row the tool draws the session output (our notes plus what the target returned: both `whoami` lines with their times) as a PNG, green title bar for PASS, red for FAIL, saved as `envs/<name>/logs/runs/<run>/row-N.screen.png` (mode 600), column `Screenshot` in the results CSV, inline in the mail. env.json `outputs.screenshots`: `all` (default) | `failures` | `off`; `screenshots.font_size/max_lines/width_chars` tune the look. Needs python3-pil. The image is made from output the engine already redacted, so the vault password never appears.

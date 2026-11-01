@@ -6,7 +6,8 @@
 # Optional env: PSMP_PORT(22) WAIT(60) PSMP_REASON CP_FOLDER(Root) CCP_CERT CCP_KEY PSMP_KEY KNOWN_HOSTS RESULT_JSON
 set -uo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
-for v in PSMP_HOST PSMP_USER TARGET_USER TARGET_HOST CP_APPID CP_SAFE CP_OBJECT CCP_URL; do [ -n "${!v:-}" ] || { echo "missing env var: $v"; exit 2; }; done
+need="PSMP_HOST PSMP_USER TARGET_USER TARGET_HOST"; [ -n "${PSMP_MANUAL_PW:-}" ] || need="$need CP_APPID CP_SAFE CP_OBJECT CCP_URL"
+for v in $need; do [ -n "${!v:-}" ] || { echo "missing env var: $v"; exit 2; }; done
 PORT=${PSMP_PORT:-22}; WAIT=${WAIT:-60}; export PSMP_REASON=${PSMP_REASON:-automated psmp health test}
 OUT=$(mktemp); trap 'rm -f "$OUT"; unset PW' EXIT
 declare -A ST=([ccp]="not run" [login]="not run" [identity]="not run" [hold]="not run")
@@ -53,6 +54,9 @@ finish() {
 }
 
 # ---- 1) CCP: the end user's password, in memory only
+if [ -n "${PSMP_MANUAL_PW:-}" ]; then      # --manual: the operator typed the password; CCP is skipped
+  PW="$PSMP_MANUAL_PW"; unset PSMP_MANUAL_PW; ST[ccp]=skipped; note "manual password in use (CCP skipped, password not shown)"
+else
 command -v curl >/dev/null && command -v jq >/dev/null && command -v python3 >/dev/null || { soft ccp "curl, jq or python3 not installed"; ST[ccp]=FAIL; finish; }
 note "fetching the end user's password from CCP ($CCP_URL AppID=$CP_APPID Safe=$CP_SAFE)"
 copts=(-sS --max-time 20 -G -w '\n%{http_code}'); [ -n "${CCP_CERT:-}" ] && copts+=(--cert "$CCP_CERT"); [ -n "${CCP_KEY:-}" ] && copts+=(--key "$CCP_KEY")
@@ -65,6 +69,7 @@ cp_user=$(printf '%s' "$body" | jq -r '.UserName // empty'); PW=$(printf '%s' "$
 [ -n "$PW" ] || { soft ccp "CCP returned no password"; finish; }
 [ "$cp_user" = "$PSMP_USER" ] || { soft ccp "CCP account user name is '$cp_user', expected '$PSMP_USER' (wrong object?)"; unset PW; finish; }
 ST[ccp]=OK; note "CCP OK (password length ${#PW}, not shown)"
+fi
 
 # ---- 2) one PSMP session; the remote command is FIXED here
 ssh_opts=(-p "$PORT" -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)

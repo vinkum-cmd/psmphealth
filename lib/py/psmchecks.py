@@ -21,7 +21,7 @@ def precheck_psmp(host, port=22):
     if not tcp_ok(host, port): return False, f"PSMP server {host} ({', '.join(ips)}) not reachable on TCP {port}"
     return True, f"{host}:{port} -> {', '.join(ips)}"
 
-def validate(settings, mail, rows, paths, tools=("jq", "curl", "ssh", "python3")):
+def validate(settings, mail, rows, paths, tools=("jq", "curl", "ssh", "python3"), manual=False):
     bad = 0
     def line(ok, what, extra=""):
         nonlocal bad
@@ -35,7 +35,8 @@ def validate(settings, mail, rows, paths, tools=("jq", "curl", "ssh", "python3")
     print("PSMP servers (DNS + TCP port)")
     for h, p in sorted({(r["env"]["PSMP_HOST"], r["env"].get("PSMP_PORT", "22")) for r in ok_rows}): ok, msg = precheck_psmp(h, p); line(ok, f"{h}:{p}", msg)
     print("CCP (reachable, no logon)")
-    for u in sorted({r["env"]["CCP_URL"] for r in ok_rows}): c = http_code(u); line(c != 0, u, f"http {c}" if c else "no answer")
+    if manual: print("  skipped (--manual: the password is typed, CCP is not used)")
+    for u in [] if manual else sorted({r["env"]["CCP_URL"] for r in ok_rows}): c = http_code(u); line(c != 0, u, f"http {c}" if c else "no answer")
     print("Files")
     try: open(os.path.join(paths["base"], ".w"), "w").close(); os.remove(os.path.join(paths["base"], ".w")); line(True, "environment folder writable")
     except Exception as ex: line(False, "environment folder writable", str(ex))

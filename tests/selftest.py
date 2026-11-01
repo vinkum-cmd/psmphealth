@@ -129,4 +129,39 @@ class T(unittest.TestCase):
         r = self.rows("TargetPSMPServer,PSMPPort,TargetUser,TargetServer,PSMPEnduser,EndUserSafe,EndUserApp-ID,EndUserObjectName,HoldSec,Retries,Enabled.\n192.0.2.10,22,psmp-user-01,192.0.2.20,testenduser,PAMEndUser,PSMP-Testing,enduser-object-01,60,1,\n")[0]
         self.assertEqual(r["err"], ""); self.assertTrue(r["enabled"]); self.assertEqual(r["retries"], 1)
 
+    def run_manual(self, typed, seq, *args, user="typed-user"):
+        """run the tool on a real terminal (pexpect) so getpass works; returns (exit code, screen text)"""
+        import pexpect
+        self.write(); w(self.seq, "".join(x + "\n" for x in seq)); w(self.seq + ".calls", "")
+        e = dict(os.environ, PSMP_HOME=self.home, PSMP_ENV="t", PSMP_ENGINE=os.path.join(ROOT, "tests", "mock-engine.sh"), MOCK_SEQ=self.seq, MOCK_SLEEP="0")
+        c = pexpect.spawn(sys.executable, [os.path.join(ROOT, "run-psmp-tests.py"), "--manual", "--no-mail", *args], env=e, encoding="utf-8", timeout=60)
+        i = c.expect(["End user name", pexpect.EOF])
+        if i == 0:
+            c.sendline(user); i = c.expect(["Password for", pexpect.EOF])
+            if i == 0: c.sendline(typed); c.expect(pexpect.EOF)
+        c.close(); return c.exitstatus, c.before or ""
+    def test_manual_skips_ccp_and_reuses_password(self):
+        self.env.pop("ccp_url"); self.env.pop("enduser"); self.csv = "TargetUser,TargetServer\nroot,s1\nadmin,s2\n"      # no CCP values and no end user at all
+        rc, out = self.run_manual("S3cretPw!", ["PASS", "PASS"]); self.assertEqual(rc, 0, out)
+        calls = open(self.seq + ".calls").read(); self.assertEqual(calls.count("pwlen=9"), 2, calls); self.assertIn("ccp=none", calls)
+        for root, _, fs in os.walk(self.home):
+            for f in fs:
+                if not f.endswith(".png"): self.assertNotIn("S3cretPw!", open(os.path.join(root, f), errors="ignore").read(), f)
+        self.assertNotIn("S3cretPw!", out)
+        f = [x for x in os.listdir(os.path.join(self.base, "results")) if x.endswith(".csv")][0]
+        self.assertEqual({r["PSMPEnduser"] for r in csv.DictReader(open(os.path.join(self.base, "results", f)))}, {"typed-user"})
+    def test_manual_user_overrides_csv_and_rejects_bad_names(self):
+        self.csv = "TargetUser,TargetServer,PSMPEnduser\nroot,s1,alice\nroot,s2,bob\n"
+        rc, out = self.run_manual("pw1", ["PASS", "PASS"]); self.assertEqual(rc, 0, out)
+        f = [x for x in os.listdir(os.path.join(self.base, "results")) if x.endswith(".csv")][0]
+        self.assertEqual({r["PSMPEnduser"] for r in csv.DictReader(open(os.path.join(self.base, "results", f)))}, {"typed-user"})
+        rc, out = self.run_manual("pw1", ["PASS"], user="bad name;rm"); self.assertNotEqual(rc, 0); self.assertIn("not allowed", out)
+    def test_manual_stops_after_rejection(self):
+        self.env["retries"] = 0; self.csv = "TargetUser,TargetServer\nroot,s1\nadmin,s2\nops,s3\n"
+        rc, out = self.run_manual("wrong", ["FAIL:login:password prompted again: login rejected", "PASS", "PASS"]); self.assertEqual(rc, 1, out)
+        self.assertEqual(len(open(self.seq + ".calls").read().splitlines()), 1, "must not send the rejected password to rows 2 and 3 or retry"); self.assertIn("skipped", out)
+    def test_manual_needs_a_terminal(self):
+        self.csv = "TargetUser,TargetServer\nroot,s1\n"
+        rc, out = self.run_tool("--manual", seq=["PASS"], no_mail=True); self.assertNotEqual(rc, 0); self.assertIn("terminal", out)
+
 if __name__ == "__main__": unittest.main(verbosity=2)
